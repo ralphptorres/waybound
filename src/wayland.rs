@@ -1,7 +1,7 @@
 use wayland_client::protocol::{wl_compositor, wl_pointer, wl_region, wl_registry, wl_seat, wl_surface, wl_shm};
 use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
 use wayland_client::{Dispatch, Connection, QueueHandle, WEnum};
-use std::os::unix::io::AsRawFd;
+use std::os::unix::io::AsFd;
 
 pub struct WaylandState {
     pub compositor: Option<wl_compositor::WlCompositor>,
@@ -144,24 +144,20 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for WaylandState {
                     return;
                 }
 
-                let fd = tmp_file.as_raw_fd();
-                unsafe {
-                    let borrowed_fd = std::os::unix::io::BorrowedFd::borrow_raw(fd);
-                    let pool = shm.create_pool(borrowed_fd, size as i32, qh, ());
-                    let buffer = pool.create_buffer(
-                        0,
-                        width as i32,
-                        height as i32,
-                        (width * 4) as i32,
-                        wl_shm::Format::Argb8888,
-                        qh,
-                        (),
-                    );
+                let pool = shm.create_pool(tmp_file.as_fd(), size as i32, qh, ());
+                let buffer = pool.create_buffer(
+                    0,
+                    width as i32,
+                    height as i32,
+                    (width * 4) as i32,
+                    wl_shm::Format::Argb8888,
+                    qh,
+                    (),
+                );
 
-                    surface.attach(Some(&buffer), 0, 0);
-                    surface.damage_buffer(0, 0, width as i32, height as i32);
-                    surface.commit();
-                }
+                surface.attach(Some(&buffer), 0, 0);
+                surface.damage_buffer(0, 0, width as i32, height as i32);
+                surface.commit();
 
                 state.shm_file = Some(tmp_file);
             }
