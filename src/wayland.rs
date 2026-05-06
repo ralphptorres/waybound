@@ -15,6 +15,58 @@ pub struct WaylandState {
     pub shm_file: Option<std::fs::File>,
 }
 
+impl WaylandState {
+    pub fn new(command: String) -> Self {
+        WaylandState {
+            compositor: None,
+            layer_shell: None,
+            seat: None,
+            pointer: None,
+            command,
+            surface: None,
+            shm: None,
+            layer_surface: None,
+            shm_file: None,
+        }
+    }
+
+    pub fn is_ready(&self) -> bool {
+        self.compositor.is_some() && self.layer_shell.is_some() && self.shm.is_some()
+    }
+
+    pub fn create_surface(
+        &mut self,
+        qh: &QueueHandle<Self>,
+        anchor: zwlr_layer_surface_v1::Anchor,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let compositor = self.compositor.as_ref().unwrap();
+        let layer_shell = self.layer_shell.as_ref().unwrap();
+
+        let surface = compositor.create_surface(qh, ());
+        let layer_surface = layer_shell.get_layer_surface(
+            &surface,
+            None,
+            zwlr_layer_shell_v1::Layer::Overlay,
+            "waybound".to_string(),
+            qh,
+            (),
+        );
+
+        layer_surface.set_size(10, 10);
+        layer_surface.set_anchor(anchor);
+
+        let region = compositor.create_region(qh, ());
+        region.add(0, 0, 10, 10);
+        surface.set_input_region(Some(&region));
+
+        self.surface = Some(surface.clone());
+        self.layer_surface = Some(layer_surface);
+
+        surface.commit();
+        Ok(())
+    }
+}
+
 impl Dispatch<wl_registry::WlRegistry, ()> for WaylandState {
     fn event(
         state: &mut Self,
@@ -25,7 +77,7 @@ impl Dispatch<wl_registry::WlRegistry, ()> for WaylandState {
         qh: &QueueHandle<Self>,
     ) {
         if let wl_registry::Event::Global { name, interface, version } = event {
-            match &interface[..] {
+            match interface.as_str() {
                 "wl_compositor" => {
                     state.compositor = Some(proxy.bind::<wl_compositor::WlCompositor, _, _>(name, version, qh, ()));
                 }
@@ -59,7 +111,7 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandState {
         if let wl_pointer::Event::Enter { surface, .. } = event {
             if let Some(ref my_surface) = state.surface {
                 if &surface == my_surface {
-                    println!("Pointer entered hot corner! Executing: {}", state.command);
+                    println!("pointer entered hot corner! executing: {}", state.command);
                     std::process::Command::new("sh").arg("-c").arg(&state.command).spawn().ok();
                 }
             }
@@ -79,38 +131,38 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for WaylandState {
     fn event(state: &mut Self, proxy: &zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, event: zwlr_layer_surface_v1::Event, _: &(), _: &Connection, qh: &QueueHandle<Self>) {
         if let zwlr_layer_surface_v1::Event::Configure { serial, width, height } = event {
             proxy.ack_configure(serial);
-            
+
             if let (Some(shm), Some(ref surface)) = (&state.shm, &state.surface) {
                 let size = ((width * height * 4) as i32) as usize;
-                
+
                 let tmp_file = match tempfile::tempfile() {
                     Ok(f) => f,
                     Err(_) => return,
                 };
-                
+
                 if tmp_file.set_len(size as u64).is_err() {
                     return;
                 }
-                
+
                 let fd = tmp_file.as_raw_fd();
                 unsafe {
                     let borrowed_fd = std::os::unix::io::BorrowedFd::borrow_raw(fd);
                     let pool = shm.create_pool(borrowed_fd, size as i32, qh, ());
                     let buffer = pool.create_buffer(
-                        0, 
-                        width as i32, 
-                        height as i32, 
-                        (width * 4) as i32, 
-                        wl_shm::Format::Argb8888, 
-                        qh, 
-                        ()
+                        0,
+                        width as i32,
+                        height as i32,
+                        (width * 4) as i32,
+                        wl_shm::Format::Argb8888,
+                        qh,
+                        (),
                     );
-                    
+
                     surface.attach(Some(&buffer), 0, 0);
                     surface.damage_buffer(0, 0, width as i32, height as i32);
                     surface.commit();
                 }
-                
+
                 state.shm_file = Some(tmp_file);
             }
         }
@@ -136,3 +188,4 @@ impl Dispatch<wayland_client::protocol::wl_buffer::WlBuffer, ()> for WaylandStat
 impl Dispatch<wayland_client::protocol::wl_shm_pool::WlShmPool, ()> for WaylandState {
     fn event(_: &mut Self, _: &wayland_client::protocol::wl_shm_pool::WlShmPool, _: wayland_client::protocol::wl_shm_pool::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {}
 }
+
