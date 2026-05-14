@@ -49,7 +49,7 @@ struct Args {
         short = 'c',
         long,
         value_name = "config",
-        help = "path [default: $XDG_CONFIG_HOME/waybound/waybound.toml]"
+        help = "path [default: ${XDG_CONFIG_HOME:-$HOME/.config}/waybound/waybound.toml]"
     )]
     config: Option<PathBuf>,
 
@@ -75,8 +75,12 @@ struct Args {
 }
 
 fn default_config_path() -> Option<PathBuf> {
-    let base = env::var_os("XDG_CONFIG_HOME")?;
-    Some(PathBuf::from(base).join("waybound").join("waybound.toml"))
+    if let Some(base) = env::var_os("XDG_CONFIG_HOME") {
+        return Some(PathBuf::from(base).join("waybound").join("waybound.toml"));
+    }
+
+    let home = env::var_os("HOME")?;
+    Some(PathBuf::from(home).join(".config").join("waybound").join("waybound.toml"))
 }
 
 fn parse_boundary(boundary: &str, thickness: u32) -> BoundaryPlacement {

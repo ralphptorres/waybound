@@ -20,7 +20,7 @@ options:
 
 ## config
 
-by default, waybound looks for `$XDG_CONFIG_HOME/waybound/waybound.toml`
+by default, waybound looks for `${XDG_CONFIG_HOME:-$HOME/.config}/waybound/waybound.toml`
 
 sample config:
 
