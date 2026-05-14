@@ -13,6 +13,9 @@ struct Args {
 
     #[arg(short = 'n', long, default_value = "top-left")]
     corner: String,
+
+    #[arg(long)]
+    debug: bool,
 }
 
 fn parse_corner(corner: &str) -> zwlr_layer_surface_v1::Anchor {
@@ -40,22 +43,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut event_queue: EventQueue<WaylandState> = conn.new_event_queue();
     let qh = event_queue.handle();
 
-    let mut state = WaylandState::new(args.command);
+    let mut state = WaylandState::new(args.command, args.corner.clone(), args.debug);
 
     let display = conn.display();
     let _registry = display.get_registry(&qh, ());
     event_queue.roundtrip(&mut state)?;
 
     if state.is_ready() {
-        println!("creating hot corner surface at {}...", args.corner);
+        if args.debug {
+            println!("[debug] hot corner configured: {}", args.corner);
+        }
         state.create_surface(&qh, parse_corner(&args.corner))?;
     } else {
         eprintln!("error: failed to bind required wayland globals");
     }
 
-    println!("starting main loop...");
     loop {
         event_queue.blocking_dispatch(&mut state)?;
     }
 }
-

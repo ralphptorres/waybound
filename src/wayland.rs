@@ -1,6 +1,7 @@
 use wayland_client::protocol::{wl_compositor, wl_pointer, wl_region, wl_registry, wl_seat, wl_surface, wl_shm};
 use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
 use wayland_client::{Dispatch, Connection, QueueHandle, WEnum};
+use memmap2::MmapMut;
 use std::os::unix::io::AsFd;
 
 pub struct WaylandState {
@@ -9,29 +10,41 @@ pub struct WaylandState {
     pub seat: Option<wl_seat::WlSeat>,
     pub pointer: Option<wl_pointer::WlPointer>,
     pub command: String,
+    pub corner: String,
     pub surface: Option<wl_surface::WlSurface>,
     pub shm: Option<wl_shm::WlShm>,
     pub layer_surface: Option<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1>,
     pub shm_file: Option<std::fs::File>,
+    pub debug: bool,
 }
 
 impl WaylandState {
-    pub fn new(command: String) -> Self {
+    pub fn new(command: String, corner: String, debug: bool) -> Self {
         WaylandState {
             compositor: None,
             layer_shell: None,
             seat: None,
             pointer: None,
             command,
+            corner,
             surface: None,
             shm: None,
             layer_surface: None,
             shm_file: None,
+            debug,
         }
     }
 
     pub fn is_ready(&self) -> bool {
         self.compositor.is_some() && self.layer_shell.is_some() && self.shm.is_some()
+    }
+
+    fn hot_corner_pixel(debug: bool) -> [u8; 4] {
+        if debug {
+            [0x20, 0x20, 0xff, 0x66]
+        } else {
+            [0, 0, 0, 0]
+        }
     }
 
     pub fn create_surface(
@@ -111,8 +124,16 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandState {
         if let wl_pointer::Event::Enter { surface, .. } = event {
             if let Some(ref my_surface) = state.surface {
                 if &surface == my_surface {
-                    println!("pointer entered hot corner! executing: {}", state.command);
-                    std::process::Command::new("sh").arg("-c").arg(&state.command).spawn().ok();
+                    if state.debug {
+                        println!(
+                            "[debug] hot corner triggered: {}. executing: {}",
+                            state.corner, state.command
+                        );
+                    }
+                    let _ = std::process::Command::new("sh")
+                        .arg("-c")
+                        .arg(&state.command)
+                        .spawn();
                 }
             }
         }
@@ -141,6 +162,19 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for WaylandState {
                 };
 
                 if tmp_file.set_len(size as u64).is_err() {
+                    return;
+                }
+
+                let mut mmap = match unsafe { MmapMut::map_mut(&tmp_file) } {
+                    Ok(mmap) => mmap,
+                    Err(_) => return,
+                };
+
+                let pixel = Self::hot_corner_pixel(state.debug);
+                mmap.chunks_exact_mut(4)
+                    .for_each(|chunk| chunk.copy_from_slice(&pixel));
+
+                if mmap.flush().is_err() {
                     return;
                 }
 
@@ -184,4 +218,3 @@ impl Dispatch<wayland_client::protocol::wl_buffer::WlBuffer, ()> for WaylandStat
 impl Dispatch<wayland_client::protocol::wl_shm_pool::WlShmPool, ()> for WaylandState {
     fn event(_: &mut Self, _: &wayland_client::protocol::wl_shm_pool::WlShmPool, _: wayland_client::protocol::wl_shm_pool::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {}
 }
-
