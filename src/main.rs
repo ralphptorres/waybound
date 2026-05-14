@@ -4,79 +4,79 @@ use wayland_client::{Connection, EventQueue};
 use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1;
 
 mod wayland;
-use crate::wayland::{HotCornerPlacement, HotCornerRule, WaylandState};
+use crate::wayland::{BoundaryPlacement, BoundaryRule, WaylandState};
 
 #[derive(Clone, Debug)]
 struct RuleArg {
-    bound: String,
+    boundary: String,
     command: String,
 }
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
-    #[arg(short = 'r', long = "rule", value_name = "BOUND=COMMAND", num_args = 1..)]
+    #[arg(short = 'r', long = "rule", value_name = "BOUNDARY=COMMAND", num_args = 1..)]
     rule: Vec<String>,
 
     #[arg(long)]
     debug: bool,
 }
 
-fn parse_bound(bound: &str) -> HotCornerPlacement {
+fn parse_boundary(boundary: &str) -> BoundaryPlacement {
     use zwlr_layer_surface_v1::Anchor;
-    let lower = bound.to_lowercase();
+    let lower = boundary.to_lowercase();
     match lower.as_str() {
-        "top-left" => HotCornerPlacement {
+        "top-left" => BoundaryPlacement {
             name: lower,
             anchor: Anchor::Top | Anchor::Left,
             width: 10,
             height: 10,
         },
-        "top-right" => HotCornerPlacement {
+        "top-right" => BoundaryPlacement {
             name: lower,
             anchor: Anchor::Top | Anchor::Right,
             width: 10,
             height: 10,
         },
-        "bottom-left" => HotCornerPlacement {
+        "bottom-left" => BoundaryPlacement {
             name: lower,
             anchor: Anchor::Bottom | Anchor::Left,
             width: 10,
             height: 10,
         },
-        "bottom-right" => HotCornerPlacement {
+        "bottom-right" => BoundaryPlacement {
             name: lower,
             anchor: Anchor::Bottom | Anchor::Right,
             width: 10,
             height: 10,
         },
-        "top" => HotCornerPlacement {
+        "top" => BoundaryPlacement {
             name: lower,
             anchor: Anchor::Top | Anchor::Left | Anchor::Right,
             width: 0,
             height: 10,
         },
-        "bottom" => HotCornerPlacement {
+        "bottom" => BoundaryPlacement {
             name: lower,
             anchor: Anchor::Bottom | Anchor::Left | Anchor::Right,
             width: 0,
             height: 10,
         },
-        "left" => HotCornerPlacement {
+        "left" => BoundaryPlacement {
             name: lower,
             anchor: Anchor::Left | Anchor::Top | Anchor::Bottom,
             width: 10,
             height: 0,
         },
-        "right" => HotCornerPlacement {
+        "right" => BoundaryPlacement {
             name: lower,
             anchor: Anchor::Right | Anchor::Top | Anchor::Bottom,
             width: 10,
             height: 0,
         },
         _ => {
-        eprintln!("unknown bound '{}', defaulting to top-left", bound);
-            HotCornerPlacement {
+            eprintln!("unknown boundary '{}', defaulting to top-left", boundary);
+            BoundaryPlacement {
                 name: "top-left".to_string(),
                 anchor: Anchor::Top | Anchor::Left,
                 width: 10,
@@ -96,12 +96,12 @@ fn parse_rule(rule: &str) -> Option<RuleArg> {
     }
 
     Some(RuleArg {
-        bound: placement.to_string(),
+        boundary: placement.to_string(),
         command: command.to_string(),
     })
 }
 
-fn placement_priority(placement: &HotCornerPlacement) -> u8 {
+fn placement_priority(placement: &BoundaryPlacement) -> u8 {
     if placement.width > 0 && placement.height > 0 {
         1
     } else {
@@ -109,7 +109,7 @@ fn placement_priority(placement: &HotCornerPlacement) -> u8 {
     }
 }
 
-fn build_rules(args: &Args) -> Result<Vec<HotCornerRule>, Box<dyn std::error::Error>> {
+fn build_rules(args: &Args) -> Result<Vec<BoundaryRule>, Box<dyn std::error::Error>> {
     if args.rule.is_empty() {
         return Err("at least one --rule bound=command is required".into());
     }
@@ -119,7 +119,7 @@ fn build_rules(args: &Args) -> Result<Vec<HotCornerRule>, Box<dyn std::error::Er
 
     for rule in &args.rule {
         let parsed = parse_rule(rule).ok_or_else(|| format!("invalid rule '{}', expected bound=command", rule))?;
-        let placement = parse_bound(&parsed.bound);
+        let placement = parse_boundary(&parsed.boundary);
 
         if !seen_bounds.insert(placement.name.clone()) {
             if args.debug {
@@ -128,7 +128,7 @@ fn build_rules(args: &Args) -> Result<Vec<HotCornerRule>, Box<dyn std::error::Er
             continue;
         }
 
-        rules.push(HotCornerRule {
+        rules.push(BoundaryRule {
             placement,
             command: parsed.command,
         });
@@ -156,7 +156,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if state.is_ready() {
         if args.debug {
             for rule in &state.rules {
-                println!("[debug] hot corner configured: {}", rule.placement.name);
+                println!("[debug] boundary configured: {}", rule.placement.name);
             }
         }
         state.create_surfaces(&qh)?;
