@@ -3,6 +3,8 @@
 hot boundaries (corners and edges) for wayland. a simple util that triggers
 commands when the pointer enters configured corners and edges
 
+![waybound demo](https://github.com/user-attachments/assets/8c5c5399-60ce-4014-a9a7-72f70da13e52)
+
 ## usage
 
 ```sh
