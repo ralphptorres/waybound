@@ -3,84 +3,79 @@ use wayland_client::{Connection, EventQueue};
 use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1;
 
 mod wayland;
-use crate::wayland::WaylandState;
+use crate::wayland::{HotCornerPlacement, HotCornerRule, WaylandState};
 
 #[derive(Clone, Debug)]
-struct Placement {
-    name: String,
-    anchor: zwlr_layer_surface_v1::Anchor,
-    width: u32,
-    height: u32,
+struct RuleArg {
+    bound: String,
+    command: String,
 }
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
-    #[arg(short = 'c', long)]
-    command: String,
-
-    #[arg(short = 'n', long, default_value = "top-left")]
-    corner: String,
+    #[arg(short = 'r', long = "rule", value_name = "BOUND=COMMAND", num_args = 1..)]
+    rule: Vec<String>,
 
     #[arg(long)]
     debug: bool,
 }
 
-fn parse_placement(corner: &str) -> Placement {
+fn parse_bound(bound: &str) -> HotCornerPlacement {
     use zwlr_layer_surface_v1::Anchor;
-    let lower = corner.to_lowercase();
+    let lower = bound.to_lowercase();
     match lower.as_str() {
-        "top-left" => Placement {
+        "top-left" => HotCornerPlacement {
             name: lower,
             anchor: Anchor::Top | Anchor::Left,
             width: 10,
             height: 10,
         },
-        "top-right" => Placement {
+        "top-right" => HotCornerPlacement {
             name: lower,
             anchor: Anchor::Top | Anchor::Right,
             width: 10,
             height: 10,
         },
-        "bottom-left" => Placement {
+        "bottom-left" => HotCornerPlacement {
             name: lower,
             anchor: Anchor::Bottom | Anchor::Left,
             width: 10,
             height: 10,
         },
-        "bottom-right" => Placement {
+        "bottom-right" => HotCornerPlacement {
             name: lower,
             anchor: Anchor::Bottom | Anchor::Right,
             width: 10,
             height: 10,
         },
-        "top" => Placement {
+        "top" => HotCornerPlacement {
             name: lower,
             anchor: Anchor::Top | Anchor::Left | Anchor::Right,
             width: 0,
             height: 10,
         },
-        "bottom" => Placement {
+        "bottom" => HotCornerPlacement {
             name: lower,
             anchor: Anchor::Bottom | Anchor::Left | Anchor::Right,
             width: 0,
             height: 10,
         },
-        "left" => Placement {
+        "left" => HotCornerPlacement {
             name: lower,
             anchor: Anchor::Left | Anchor::Top | Anchor::Bottom,
             width: 10,
             height: 0,
         },
-        "right" => Placement {
+        "right" => HotCornerPlacement {
             name: lower,
             anchor: Anchor::Right | Anchor::Top | Anchor::Bottom,
             width: 10,
             height: 0,
         },
         _ => {
-            eprintln!("unknown corner '{}', defaulting to top-left", corner);
-            Placement {
+        eprintln!("unknown bound '{}', defaulting to top-left", bound);
+            HotCornerPlacement {
                 name: "top-left".to_string(),
                 anchor: Anchor::Top | Anchor::Left,
                 width: 10,
@@ -90,6 +85,41 @@ fn parse_placement(corner: &str) -> Placement {
     }
 }
 
+fn parse_rule(rule: &str) -> Option<RuleArg> {
+    let (placement, command) = rule.split_once('=')?;
+    let placement = placement.trim();
+    let command = command.trim();
+
+    if placement.is_empty() || command.is_empty() {
+        return None;
+    }
+
+    Some(RuleArg {
+        bound: placement.to_string(),
+        command: command.to_string(),
+    })
+}
+
+fn build_rules(args: &Args) -> Result<Vec<HotCornerRule>, Box<dyn std::error::Error>> {
+    if args.rule.is_empty() {
+        return Err("at least one --rule bound=command is required".into());
+    }
+
+    let mut rules = Vec::new();
+
+    for rule in &args.rule {
+        let parsed = parse_rule(rule).ok_or_else(|| format!("invalid rule '{}', expected bound=command", rule))?;
+        let placement = parse_bound(&parsed.bound);
+
+        rules.push(HotCornerRule {
+            placement,
+            command: parsed.command,
+        });
+    }
+
+    Ok(rules)
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
@@ -97,8 +127,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut event_queue: EventQueue<WaylandState> = conn.new_event_queue();
     let qh = event_queue.handle();
 
-    let placement = parse_placement(&args.corner);
-    let mut state = WaylandState::new(args.command, placement.name.clone(), args.debug);
+    let rules = build_rules(&args)?;
+
+    let mut state = WaylandState::new(rules, args.debug);
 
     let display = conn.display();
     let _registry = display.get_registry(&qh, ());
@@ -106,9 +137,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if state.is_ready() {
         if args.debug {
-            println!("[debug] hot corner configured: {}", placement.name);
+            for rule in &state.rules {
+                println!("[debug] hot corner configured: {}", rule.placement.name);
+            }
         }
-        state.create_surface(&qh, placement.anchor, placement.width, placement.height)?;
+        state.create_surfaces(&qh)?;
     } else {
         eprintln!("error: failed to bind required wayland globals");
     }

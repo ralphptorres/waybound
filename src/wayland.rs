@@ -1,36 +1,52 @@
-use wayland_client::protocol::{wl_compositor, wl_pointer, wl_region, wl_registry, wl_seat, wl_surface, wl_shm};
-use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
-use wayland_client::{Dispatch, Connection, QueueHandle, WEnum};
 use memmap2::MmapMut;
 use std::os::unix::io::AsFd;
+use wayland_client::protocol::{wl_compositor, wl_pointer, wl_region, wl_registry, wl_seat, wl_shm, wl_surface};
+use wayland_client::{Connection, Dispatch, QueueHandle, WEnum};
+use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
+
+#[derive(Clone, Debug)]
+pub struct HotCornerPlacement {
+    pub name: String,
+    pub anchor: zwlr_layer_surface_v1::Anchor,
+    pub width: u32,
+    pub height: u32,
+}
+
+#[derive(Clone, Debug)]
+pub struct HotCornerRule {
+    pub placement: HotCornerPlacement,
+    pub command: String,
+}
+
+#[derive(Clone, Debug)]
+struct HotCornerSurface {
+    placement_name: String,
+    command: String,
+    layer_surface: zwlr_layer_surface_v1::ZwlrLayerSurfaceV1,
+    surface: wl_surface::WlSurface,
+}
 
 pub struct WaylandState {
     pub compositor: Option<wl_compositor::WlCompositor>,
     pub layer_shell: Option<zwlr_layer_shell_v1::ZwlrLayerShellV1>,
     pub seat: Option<wl_seat::WlSeat>,
     pub pointer: Option<wl_pointer::WlPointer>,
-    pub command: String,
-    pub corner: String,
-    pub surface: Option<wl_surface::WlSurface>,
+    pub rules: Vec<HotCornerRule>,
+    surfaces: Vec<HotCornerSurface>,
     pub shm: Option<wl_shm::WlShm>,
-    pub layer_surface: Option<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1>,
-    pub shm_file: Option<std::fs::File>,
     pub debug: bool,
 }
 
 impl WaylandState {
-    pub fn new(command: String, corner: String, debug: bool) -> Self {
+    pub fn new(rules: Vec<HotCornerRule>, debug: bool) -> Self {
         WaylandState {
             compositor: None,
             layer_shell: None,
             seat: None,
             pointer: None,
-            command,
-            corner,
-            surface: None,
+            rules,
+            surfaces: Vec::new(),
             shm: None,
-            layer_surface: None,
-            shm_file: None,
             debug,
         }
     }
@@ -47,12 +63,18 @@ impl WaylandState {
         }
     }
 
-    pub fn create_surface(
+    pub fn create_surfaces(&mut self, qh: &QueueHandle<Self>) -> Result<(), Box<dyn std::error::Error>> {
+        let rules = self.rules.clone();
+        for rule in rules {
+            self.create_surface(qh, rule)?;
+        }
+        Ok(())
+    }
+
+    fn create_surface(
         &mut self,
         qh: &QueueHandle<Self>,
-        anchor: zwlr_layer_surface_v1::Anchor,
-        width: u32,
-        height: u32,
+        rule: HotCornerRule,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let compositor = self.compositor.as_ref().unwrap();
         let layer_shell = self.layer_shell.as_ref().unwrap();
@@ -67,11 +89,15 @@ impl WaylandState {
             (),
         );
 
-        layer_surface.set_size(width, height);
-        layer_surface.set_anchor(anchor);
+        layer_surface.set_size(rule.placement.width, rule.placement.height);
+        layer_surface.set_anchor(rule.placement.anchor);
 
-        self.surface = Some(surface.clone());
-        self.layer_surface = Some(layer_surface);
+        self.surfaces.push(HotCornerSurface {
+            placement_name: rule.placement.name,
+            command: rule.command,
+            layer_surface: layer_surface.clone(),
+            surface: surface.clone(),
+        });
 
         surface.commit();
         Ok(())
@@ -120,18 +146,19 @@ impl Dispatch<wl_seat::WlSeat, ()> for WaylandState {
 impl Dispatch<wl_pointer::WlPointer, ()> for WaylandState {
     fn event(state: &mut Self, _proxy: &wl_pointer::WlPointer, event: wl_pointer::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
         if let wl_pointer::Event::Enter { surface, .. } = event {
-            if let Some(ref my_surface) = state.surface {
-                if &surface == my_surface {
+            for hot_corner in &state.surfaces {
+                if surface == hot_corner.surface {
                     if state.debug {
                         println!(
                             "[debug] hot corner triggered: {}. executing: {}",
-                            state.corner, state.command
+                            hot_corner.placement_name, hot_corner.command
                         );
                     }
                     let _ = std::process::Command::new("sh")
                         .arg("-c")
-                        .arg(&state.command)
+                        .arg(&hot_corner.command)
                         .spawn();
+                    break;
                 }
             }
         }
@@ -151,13 +178,7 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for WaylandState {
         if let zwlr_layer_surface_v1::Event::Configure { serial, width, height } = event {
             proxy.ack_configure(serial);
 
-            if let (Some(shm), Some(ref surface)) = (&state.shm, &state.surface) {
-                if let Some(compositor) = &state.compositor {
-                    let region = compositor.create_region(qh, ());
-                    region.add(0, 0, width as i32, height as i32);
-                    surface.set_input_region(Some(&region));
-                }
-
+            if let Some(shm) = &state.shm {
                 let size = ((width * height * 4) as i32) as usize;
 
                 let tmp_file = match tempfile::tempfile() {
@@ -175,8 +196,7 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for WaylandState {
                 };
 
                 let pixel = Self::hot_corner_pixel(state.debug);
-                mmap.chunks_exact_mut(4)
-                    .for_each(|chunk| chunk.copy_from_slice(&pixel));
+                mmap.chunks_exact_mut(4).for_each(|chunk| chunk.copy_from_slice(&pixel));
 
                 if mmap.flush().is_err() {
                     return;
@@ -193,11 +213,14 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for WaylandState {
                     (),
                 );
 
-                surface.attach(Some(&buffer), 0, 0);
-                surface.damage_buffer(0, 0, width as i32, height as i32);
-                surface.commit();
-
-                state.shm_file = Some(tmp_file);
+                for hot_corner in &state.surfaces {
+                    if hot_corner.layer_surface == *proxy {
+                        hot_corner.surface.attach(Some(&buffer), 0, 0);
+                        hot_corner.surface.damage_buffer(0, 0, width as i32, height as i32);
+                        hot_corner.surface.commit();
+                        break;
+                    }
+                }
             }
         }
     }
