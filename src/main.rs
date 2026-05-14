@@ -5,6 +5,14 @@ use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1;
 mod wayland;
 use crate::wayland::WaylandState;
 
+#[derive(Clone, Debug)]
+struct Placement {
+    name: String,
+    anchor: zwlr_layer_surface_v1::Anchor,
+    width: u32,
+    height: u32,
+}
+
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
@@ -18,20 +26,66 @@ struct Args {
     debug: bool,
 }
 
-fn parse_corner(corner: &str) -> zwlr_layer_surface_v1::Anchor {
+fn parse_placement(corner: &str) -> Placement {
     use zwlr_layer_surface_v1::Anchor;
-    match corner.to_lowercase().as_str() {
-        "top-left" => Anchor::Top | Anchor::Left,
-        "top-right" => Anchor::Top | Anchor::Right,
-        "bottom-left" => Anchor::Bottom | Anchor::Left,
-        "bottom-right" => Anchor::Bottom | Anchor::Right,
-        "top" => Anchor::Top | Anchor::Left | Anchor::Right,
-        "bottom" => Anchor::Bottom | Anchor::Left | Anchor::Right,
-        "left" => Anchor::Left | Anchor::Top | Anchor::Bottom,
-        "right" => Anchor::Right | Anchor::Top | Anchor::Bottom,
+    let lower = corner.to_lowercase();
+    match lower.as_str() {
+        "top-left" => Placement {
+            name: lower,
+            anchor: Anchor::Top | Anchor::Left,
+            width: 10,
+            height: 10,
+        },
+        "top-right" => Placement {
+            name: lower,
+            anchor: Anchor::Top | Anchor::Right,
+            width: 10,
+            height: 10,
+        },
+        "bottom-left" => Placement {
+            name: lower,
+            anchor: Anchor::Bottom | Anchor::Left,
+            width: 10,
+            height: 10,
+        },
+        "bottom-right" => Placement {
+            name: lower,
+            anchor: Anchor::Bottom | Anchor::Right,
+            width: 10,
+            height: 10,
+        },
+        "top" => Placement {
+            name: lower,
+            anchor: Anchor::Top | Anchor::Left | Anchor::Right,
+            width: 0,
+            height: 10,
+        },
+        "bottom" => Placement {
+            name: lower,
+            anchor: Anchor::Bottom | Anchor::Left | Anchor::Right,
+            width: 0,
+            height: 10,
+        },
+        "left" => Placement {
+            name: lower,
+            anchor: Anchor::Left | Anchor::Top | Anchor::Bottom,
+            width: 10,
+            height: 0,
+        },
+        "right" => Placement {
+            name: lower,
+            anchor: Anchor::Right | Anchor::Top | Anchor::Bottom,
+            width: 10,
+            height: 0,
+        },
         _ => {
             eprintln!("unknown corner '{}', defaulting to top-left", corner);
-            Anchor::Top | Anchor::Left
+            Placement {
+                name: "top-left".to_string(),
+                anchor: Anchor::Top | Anchor::Left,
+                width: 10,
+                height: 10,
+            }
         }
     }
 }
@@ -43,7 +97,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut event_queue: EventQueue<WaylandState> = conn.new_event_queue();
     let qh = event_queue.handle();
 
-    let mut state = WaylandState::new(args.command, args.corner.clone(), args.debug);
+    let placement = parse_placement(&args.corner);
+    let mut state = WaylandState::new(args.command, placement.name.clone(), args.debug);
 
     let display = conn.display();
     let _registry = display.get_registry(&qh, ());
@@ -51,9 +106,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if state.is_ready() {
         if args.debug {
-            println!("[debug] hot corner configured: {}", args.corner);
+            println!("[debug] hot corner configured: {}", placement.name);
         }
-        state.create_surface(&qh, parse_corner(&args.corner))?;
+        state.create_surface(&qh, placement.anchor, placement.width, placement.height)?;
     } else {
         eprintln!("error: failed to bind required wayland globals");
     }

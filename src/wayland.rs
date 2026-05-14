@@ -51,6 +51,8 @@ impl WaylandState {
         &mut self,
         qh: &QueueHandle<Self>,
         anchor: zwlr_layer_surface_v1::Anchor,
+        width: u32,
+        height: u32,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let compositor = self.compositor.as_ref().unwrap();
         let layer_shell = self.layer_shell.as_ref().unwrap();
@@ -65,12 +67,8 @@ impl WaylandState {
             (),
         );
 
-        layer_surface.set_size(10, 10);
+        layer_surface.set_size(width, height);
         layer_surface.set_anchor(anchor);
-
-        let region = compositor.create_region(qh, ());
-        region.add(0, 0, 10, 10);
-        surface.set_input_region(Some(&region));
 
         self.surface = Some(surface.clone());
         self.layer_surface = Some(layer_surface);
@@ -154,6 +152,12 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for WaylandState {
             proxy.ack_configure(serial);
 
             if let (Some(shm), Some(ref surface)) = (&state.shm, &state.surface) {
+                if let Some(compositor) = &state.compositor {
+                    let region = compositor.create_region(qh, ());
+                    region.add(0, 0, width as i32, height as i32);
+                    surface.set_input_region(Some(&region));
+                }
+
                 let size = ((width * height * 4) as i32) as usize;
 
                 let tmp_file = match tempfile::tempfile() {
