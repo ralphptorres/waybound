@@ -1,4 +1,5 @@
 use clap::Parser;
+use std::collections::HashSet;
 use wayland_client::{Connection, EventQueue};
 use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1;
 
@@ -100,16 +101,32 @@ fn parse_rule(rule: &str) -> Option<RuleArg> {
     })
 }
 
+fn placement_priority(placement: &HotCornerPlacement) -> u8 {
+    if placement.width > 0 && placement.height > 0 {
+        1
+    } else {
+        0
+    }
+}
+
 fn build_rules(args: &Args) -> Result<Vec<HotCornerRule>, Box<dyn std::error::Error>> {
     if args.rule.is_empty() {
         return Err("at least one --rule bound=command is required".into());
     }
 
+    let mut seen_bounds = HashSet::new();
     let mut rules = Vec::new();
 
     for rule in &args.rule {
         let parsed = parse_rule(rule).ok_or_else(|| format!("invalid rule '{}', expected bound=command", rule))?;
         let placement = parse_bound(&parsed.bound);
+
+        if !seen_bounds.insert(placement.name.clone()) {
+            if args.debug {
+                println!("[debug] skipping duplicate bound: {}", placement.name);
+            }
+            continue;
+        }
 
         rules.push(HotCornerRule {
             placement,
@@ -117,6 +134,7 @@ fn build_rules(args: &Args) -> Result<Vec<HotCornerRule>, Box<dyn std::error::Er
         });
     }
 
+    rules.sort_by_key(|rule| placement_priority(&rule.placement));
     Ok(rules)
 }
 
